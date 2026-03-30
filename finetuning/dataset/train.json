@@ -1,0 +1,27 @@
+[
+  {
+    "instruction": "What is the right to life?",
+    "context": "Article 21 of the Indian Constitution states that no person shall be deprived of his life or personal liberty except according to procedure established by law.",
+    "response": "The right to life, guaranteed under Article 21 of the Indian Constitution, protects individuals from arbitrary deprivation of life or personal liberty. This right can only be restricted through a lawful procedure established by law, ensuring due process."
+  },
+  {
+    "instruction": "What does habeas corpus mean?",
+    "context": "Habeas corpus is a legal action through which a person can seek relief from unlawful detention. The literal meaning is 'you shall have the body'.",
+    "response": "Habeas corpus is a fundamental legal writ that protects individuals from unlawful detention. Literally meaning 'you shall have the body,' it allows a detained person to challenge the legality of their imprisonment before a court."
+  },
+  {
+    "instruction": "What is insider trading?",
+    "context": "Insider trading refers to the buying or selling of a publicly traded company's securities by someone who has non-public, material information about that company.",
+    "response": "Insider trading involves the illegal practice of trading securities using material, non-public information. It gives unfair advantages to those with privileged access to confidential corporate information, undermining market integrity."
+  },
+  {
+    "instruction": "What is a balance sheet?",
+    "context": "A balance sheet is a financial statement that reports a company's assets, liabilities, and shareholders' equity at a specific point in time.",
+    "response": "A balance sheet is a financial snapshot of a company at a specific point in time. It reports three key categories: assets (what the company owns), liabilities (what it owes), and shareholders' equity (the residual interest), following the fundamental equation: Assets = Liabilities + Equity."
+  },
+  {
+    "instruction": "What is an offside rule in football?",
+    "context": "In football (soccer), a player is in an offside position if they are nearer to the opponent's goal line than both the ball and the second-last opponent when the ball is played to them.",
+    "response": "The offside rule in football prohibits a player from being in an offside position when the ball is played to them. A player is offside if they are closer to the opponent's goal than both the ball and the second-last defender at the moment the pass is made."
+  }
+]
