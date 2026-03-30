@@ -1,225 +1,131 @@
 """
 SecureDocAI - Document Ingestion Layer
-Handles loading and chunking of PDF, DOCX, and TXT documents.
+All langchain imports are lazy (inside functions) — no module-level crashes.
 """
 
-import os
 import logging
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 
-from langchain_core.documents import Document
-try:
-    from langchain_text_splitters import RecursiveCharacterTextSplitter
-except ImportError:
-    from langchain.text_splitter import RecursiveCharacterTextSplitter
-
-from config import (
-    CHUNK_SIZE,
-    CHUNK_OVERLAP,
-    SUPPORTED_EXTENSIONS,
-    RAW_DOCS_DIR,
-)
+from config import CHUNK_SIZE, CHUNK_OVERLAP, SUPPORTED_EXTENSIONS, RAW_DOCS_DIR
 
 logger = logging.getLogger(__name__)
 
 
-# ─── LOADERS ──────────────────────────────────────────────────────────────────
+def _make_doc(content: str, source: str, page: int):
+    """Create a LangChain Document with lazy import."""
+    try:
+        from langchain_core.documents import Document
+    except ImportError:
+        from langchain.schema import Document
+    return Document(page_content=content, metadata={"source": source, "page": page})
 
-def load_pdf(file_path: str) -> List[Document]:
-    """Load a PDF file using PyPDFLoader."""
+
+def _load_pdf(path: Path) -> list:
     try:
         from langchain_community.document_loaders import PyPDFLoader
-        loader = PyPDFLoader(file_path)
-        docs = loader.load()
-        # Ensure metadata is complete
-        for doc in docs:
-            doc.metadata["source"] = os.path.basename(file_path)
-            doc.metadata.setdefault("page", doc.metadata.get("page", 0) + 1)
-        logger.info(f"Loaded PDF: {file_path} ({len(docs)} pages)")
-        return docs
-    except Exception as e:
-        logger.error(f"Failed to load PDF {file_path}: {e}")
-        raise
-
-
-def load_docx(file_path: str) -> List[Document]:
-    """Load a DOCX file with page-aware chunking."""
-    try:
-        from langchain_community.document_loaders import Docx2txtLoader
-        loader = Docx2txtLoader(file_path)
-        docs = loader.load()
-        for i, doc in enumerate(docs):
-            doc.metadata["source"] = os.path.basename(file_path)
-            doc.metadata["page"] = i + 1
-        logger.info(f"Loaded DOCX: {file_path} ({len(docs)} sections)")
-        return docs
-    except Exception as e:
-        logger.error(f"Failed to load DOCX {file_path}: {e}")
-        raise
-
-
-def load_txt(file_path: str) -> List[Document]:
-    """Load a plain text file."""
-    try:
-        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
-            content = f.read()
-        doc = Document(
-            page_content=content,
-            metadata={
-                "source": os.path.basename(file_path),
-                "page": 1,
-            },
-        )
-        logger.info(f"Loaded TXT: {file_path}")
-        return [doc]
-    except Exception as e:
-        logger.error(f"Failed to load TXT {file_path}: {e}")
-        raise
-
-
-# ─── DISPATCHER ───────────────────────────────────────────────────────────────
-
-def load_document(file_path: str) -> List[Document]:
-    """Dispatch loading based on file extension."""
-    ext = Path(file_path).suffix.lower()
-    if ext == ".pdf":
-        return load_pdf(file_path)
-    elif ext == ".docx":
-        return load_docx(file_path)
-    elif ext == ".txt":
-        return load_txt(file_path)
-    else:
-        raise ValueError(
-            f"Unsupported file type: {ext}. "
-            f"Supported: {', '.join(SUPPORTED_EXTENSIONS)}"
-        )
-
-
-def load_directory(directory: str) -> List[Document]:
-    """Load all supported documents from a directory."""
-    docs = []
-    directory = Path(directory)
-    if not directory.exists():
-        logger.warning(f"Directory does not exist: {directory}")
-        return docs
-
-    files = [
-        f for f in directory.iterdir()
-        if f.is_file() and f.suffix.lower() in SUPPORTED_EXTENSIONS
-    ]
-
-    if not files:
-        logger.warning(f"No supported documents found in: {directory}")
-        return docs
-
-    for file_path in files:
-        try:
-            file_docs = load_document(str(file_path))
-            docs.extend(file_docs)
-            print(f"  ✓ Loaded: {file_path.name} ({len(file_docs)} pages/sections)")
-        except Exception as e:
-            print(f"  ✗ Failed: {file_path.name} → {e}")
-
+    except ImportError:
+        raise ImportError("Run: pip install langchain-community pypdf")
+    docs = PyPDFLoader(str(path)).load()
+    for doc in docs:
+        doc.metadata["source"] = path.name
+        doc.metadata["page"]   = doc.metadata.get("page", 0) + 1
     return docs
 
 
-# ─── CHUNKING ─────────────────────────────────────────────────────────────────
+def _load_docx(path: Path) -> list:
+    try:
+        from langchain_community.document_loaders import Docx2txtLoader
+    except ImportError:
+        raise ImportError("Run: pip install langchain-community docx2txt")
+    docs = Docx2txtLoader(str(path)).load()
+    for i, doc in enumerate(docs):
+        doc.metadata["source"] = path.name
+        doc.metadata["page"]   = i + 1
+    return docs
 
-def chunk_documents(
-    documents: List[Document],
-    chunk_size: int = CHUNK_SIZE,
-    chunk_overlap: int = CHUNK_OVERLAP,
-) -> List[Document]:
-    """
-    Split documents into overlapping chunks while preserving metadata.
-    Uses RecursiveCharacterTextSplitter for natural boundary detection.
-    """
+
+def _load_txt(path: Path) -> list:
+    content = path.read_text(encoding="utf-8", errors="replace")
+    return [_make_doc(content, path.name, 1)]
+
+
+def _load_file(path: Path) -> list:
+    ext = path.suffix.lower()
+    if ext == ".pdf":  return _load_pdf(path)
+    if ext == ".docx": return _load_docx(path)
+    if ext == ".txt":  return _load_txt(path)
+    raise ValueError(f"Unsupported: {ext}")
+
+
+def get_raw_doc_list() -> List[Path]:
+    return sorted([
+        f for f in RAW_DOCS_DIR.iterdir()
+        if f.is_file() and f.suffix.lower() in SUPPORTED_EXTENSIONS
+    ])
+
+
+def load_all_documents() -> list:
+    files = get_raw_doc_list()
+    if not files:
+        raise FileNotFoundError(
+            f"No documents found in: {RAW_DOCS_DIR}\n"
+            "Upload files first using option 1 in the CLI."
+        )
+    all_docs = []
+    for f in files:
+        try:
+            docs = _load_file(f)
+            all_docs.extend(docs)
+            print(f"  ✓ {f.name}  ({len(docs)} page/section)")
+        except Exception as e:
+            print(f"  ✗ {f.name}  → {e}")
+    if not all_docs:
+        raise ValueError("All files failed to load.")
+    return all_docs
+
+
+def chunk_documents(documents: list) -> list:
+    try:
+        from langchain_text_splitters import RecursiveCharacterTextSplitter
+    except ImportError:
+        try:
+            from langchain.text_splitter import RecursiveCharacterTextSplitter
+        except ImportError:
+            raise ImportError("Run: pip install langchain-text-splitters")
+
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=chunk_size,
-        chunk_overlap=chunk_overlap,
-        length_function=len,
+        chunk_size=CHUNK_SIZE,
+        chunk_overlap=CHUNK_OVERLAP,
         separators=["\n\n", "\n", ". ", " ", ""],
         add_start_index=True,
     )
-
     chunks = splitter.split_documents(documents)
-
-    # Preserve and enrich metadata
-    for i, chunk in enumerate(chunks):
-        chunk.metadata["chunk_id"] = i
-        chunk.metadata.setdefault("source", "unknown")
-        chunk.metadata.setdefault("page", 1)
-
-    logger.info(
-        f"Chunked {len(documents)} document(s) → {len(chunks)} chunks "
-        f"(size={chunk_size}, overlap={chunk_overlap})"
-    )
+    for i, c in enumerate(chunks):
+        c.metadata["chunk_id"] = i
+        c.metadata.setdefault("source", "unknown")
+        c.metadata.setdefault("page", 1)
     return chunks
 
 
-# ─── MAIN INGESTION FUNCTION ──────────────────────────────────────────────────
-
-def ingest_documents(
-    file_paths: Optional[List[str]] = None,
-    directory: Optional[str] = None,
-    chunk_size: int = CHUNK_SIZE,
-    chunk_overlap: int = CHUNK_OVERLAP,
-) -> List[Document]:
-    """
-    Full ingestion pipeline: load → chunk → return.
-
-    Args:
-        file_paths: List of individual file paths to ingest.
-        directory: Directory to scan for documents.
-        chunk_size: Target chunk size in characters.
-        chunk_overlap: Overlap between consecutive chunks.
-
-    Returns:
-        List of chunked Document objects with metadata.
-    """
-    all_docs: List[Document] = []
-
-    if file_paths:
-        for fp in file_paths:
-            if not os.path.exists(fp):
-                print(f"  ✗ File not found: {fp}")
-                continue
-            try:
-                docs = load_document(fp)
-                all_docs.extend(docs)
-                print(f"  ✓ Loaded: {os.path.basename(fp)} ({len(docs)} pages/sections)")
-            except Exception as e:
-                print(f"  ✗ Error loading {fp}: {e}")
-
-    if directory:
-        dir_docs = load_directory(directory)
-        all_docs.extend(dir_docs)
-
-    if not all_docs:
-        raise ValueError("No documents were successfully loaded.")
-
-    print(f"\n  📄 Total raw pages/sections: {len(all_docs)}")
-    chunks = chunk_documents(all_docs, chunk_size, chunk_overlap)
+def ingest_all() -> list:
+    """Main entry point: scan raw_docs/ → load → chunk → return."""
+    print(f"\n  📂 Scanning: {RAW_DOCS_DIR}")
+    docs   = load_all_documents()
+    print(f"\n  📄 Total pages/sections loaded: {len(docs)}")
+    chunks = chunk_documents(docs)
     print(f"  🔪 Total chunks created: {len(chunks)}")
-
     return chunks
 
 
-def get_document_summary(chunks: List[Document]) -> Dict[str, Any]:
-    """Return a summary of ingested chunks grouped by source."""
+def summarize_chunks(chunks: list) -> Dict[str, Any]:
     summary: Dict[str, Any] = {}
-    for chunk in chunks:
-        source = chunk.metadata.get("source", "unknown")
-        if source not in summary:
-            summary[source] = {"chunks": 0, "pages": set()}
-        summary[source]["chunks"] += 1
-        page = chunk.metadata.get("page", 1)
-        summary[source]["pages"].add(page)
-
-    # Convert sets to sorted lists for serialization
+    for c in chunks:
+        src = c.metadata.get("source", "unknown")
+        if src not in summary:
+            summary[src] = {"chunks": 0, "pages": set()}
+        summary[src]["chunks"] += 1
+        summary[src]["pages"].add(c.metadata.get("page", 1))
     for src in summary:
         summary[src]["pages"] = sorted(summary[src]["pages"])
-        summary[src]["page_count"] = len(summary[src]["pages"])
-
     return summary

@@ -1,11 +1,10 @@
 """
-SecureDocAI - CLI Entry Point
-Interactive command-line interface for the offline document intelligence system.
+SecureDocAI v2.0 - CLI Entry Point
+Simplified 4-option menu. No domains. Drop files → process → ask.
 
 Usage:
     python main.py
-    python main.py --domain legal
-    python main.py --domain finance --file report.pdf
+    python main.py --backend transformers
 """
 
 import os
@@ -15,273 +14,194 @@ import shutil
 import logging
 import argparse
 from pathlib import Path
-from typing import Optional, List
-
-# ─── SETUP PATH ───────────────────────────────────────────────────────────────
+from typing import List, Optional
 
 BASE_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(BASE_DIR))
 
-from config import (
-    BANNER,
-    APP_NAME,
-    SUPPORTED_DOMAINS,
-    RAW_DOCS_DIR,
-    SLM_BACKEND,
-)
+from config import BANNER, APP_NAME, RAW_DOCS_DIR, SUPPORTED_EXTENSIONS, SLM_BACKEND
 
-# ─── LOGGING ──────────────────────────────────────────────────────────────────
-
-logging.basicConfig(
-    level=logging.WARNING,
-    format="%(levelname)s [%(name)s]: %(message)s",
-)
-logger = logging.getLogger(__name__)
-
+logging.basicConfig(level=logging.WARNING,
+                    format="%(levelname)s [%(name)s]: %(message)s")
 
 # ─── DISPLAY HELPERS ──────────────────────────────────────────────────────────
 
-def clear():
-    os.system("cls" if os.name == "nt" else "clear")
-
-
-def hr(char="─", width=60):
-    print(char * width)
-
-
-def header(title: str):
-    hr("═")
-    print(f"  {title}")
-    hr("═")
-
-
-def success(msg: str):
-    print(f"\n  SUCCESS: {msg}")
-
-
-def error(msg: str):
-    print(f"\n  ERROR: {msg}")
-
-
-def info(msg: str):
-    print(f"\n  ℹ  {msg}")
-
-
-def warn(msg: str):
-    print(f"\n  ⚠  {msg}")
-
-
-def prompt(msg: str) -> str:
-    return input(f"\n  ▶ {msg}: ").strip()
+def clear(): os.system("cls" if os.name == "nt" else "clear")
+def hr(c="─", w=60): print(c * w)
+def header(t): hr("═"); print(f"  {t}"); hr("═")
+def ok(m):   print(f"\n  ✅ {m}")
+def err(m):  print(f"\n  ❌ {m}")
+def info(m): print(f"\n  ℹ  {m}")
+def ask(m):  return input(f"\n  ▶ {m}: ").strip()
 
 
 # ─── SESSION STATE ────────────────────────────────────────────────────────────
+# All heavy objects are cached here — loaded once, reused forever.
 
-class SessionState:
-    """Holds all mutable CLI session state."""
+class Session:
+    vectorstore = None      # FAISS index (cached after first load)
+    all_chunks  = []        # All chunks (cached for BM25)
+    slm         = None      # SLM handler (cached after first use)
 
-    def __init__(self):
-        self.domain: str = "default"
-        self.vectorstore = None
-        self.slm = None
-        self.cached_docs: List = []
-        self.session_db_path: Optional[str] = None  # Temp path for uploaded docs
-        self.is_temp_session: bool = False
-
-    def reset_to_domain(self, domain: str):
-        self.domain = domain
-        self.vectorstore = None
-        self.cached_docs = []
-        self.is_temp_session = False
-        self.session_db_path = None
+S = Session()
 
 
-session = SessionState()
+# ─── HELPERS ──────────────────────────────────────────────────────────────────
+
+def _ensure_vectorstore():
+    """Load vectorstore into session cache if not already loaded."""
+    if S.vectorstore is not None:
+        return True
+    from backend.vectorstore import load_vectorstore, index_exists
+    if not index_exists():
+        err("No knowledge base found. Process documents first (option 2).")
+        return False
+    try:
+        S.vectorstore = load_vectorstore()
+        return True
+    except Exception as e:
+        err(f"Failed to load index: {e}")
+        return False
+
+
+def _ensure_slm():
+    """Load SLM into session cache if not already loaded."""
+    if S.slm is not None:
+        return True
+    try:
+        from backend.slm_handler import get_slm
+        S.slm = get_slm()
+        return True
+    except Exception as e:
+        err(f"SLM initialization failed: {e}")
+        return False
 
 
 # ─── MENU HANDLERS ────────────────────────────────────────────────────────────
 
-def menu_select_domain():
-    """Step 1: Choose which domain knowledge base to use."""
-    header("SELECT DOMAIN")
-    print("\n  Available domains:")
-    for i, d in enumerate(SUPPORTED_DOMAINS, 1):
-        print(f"    {i}. {d}")
-
-    choice = prompt("Enter domain name or number")
-
-    # Accept either name or number
-    if choice.isdigit():
-        idx = int(choice) - 1
-        if 0 <= idx < len(SUPPORTED_DOMAINS):
-            domain = SUPPORTED_DOMAINS[idx]
-        else:
-            error("Invalid number. Keeping current domain.")
-            return
-    elif choice.lower() in SUPPORTED_DOMAINS:
-        domain = choice.lower()
-    else:
-        warn(f"Unknown domain '{choice}'. Using 'default'.")
-        domain = "default"
-
-    session.reset_to_domain(domain)
-    success(f"Domain set to: '{domain}'")
-
-    # Auto-load vectorstore if it exists
-    _try_load_vectorstore(domain)
-
-
-def _try_load_vectorstore(domain: str):
-    """Attempt to load an existing vector store for the domain."""
-    from backend.vectorstore import domain_exists, load_vectorstore
-
-    if domain_exists(domain):
-        try:
-            print(f"\n Found existing knowledge base for '{domain}'. Loading...")
-            session.vectorstore = load_vectorstore(domain)
-            success(f"Knowledge base loaded: '{domain}'")
-        except Exception as e:
-            error(f"Could not load vector store: {e}")
-    else:
-        info(f"No knowledge base found for '{domain}'. Upload and process documents first (options 2 & 3).")
-
-
-def menu_upload_documents():
-    """Step 2: Copy user documents into the raw_docs folder for the current domain."""
-    header("UPLOAD DOCUMENTS")
-
-    domain_docs_dir = RAW_DOCS_DIR / session.domain
-    domain_docs_dir.mkdir(parents=True, exist_ok=True)
-
-    print(f"\n  Target folder: {domain_docs_dir}")
-    print(f"  Supported types: PDF, DOCX, TXT")
-    print(f"\n  Enter file paths one at a time. Press Enter with no input when done.")
+def menu_upload():
+    """Copy user files into data/raw_docs/."""
+    header("UPLOAD DOCUMENT")
+    print(f"\n  Drop files into: {RAW_DOCS_DIR}")
+    print("  Supported: PDF, DOCX, TXT")
+    print("  Enter file paths one at a time. Blank line when done.\n")
 
     uploaded = []
     while True:
-        file_path = prompt("File path (or press Enter to finish)")
-        if not file_path:
+        path_str = ask("File path (Enter to finish)")
+        if not path_str:
             break
-
-        file_path = file_path.strip('"').strip("'")  # Handle pasted paths with quotes
-        src = Path(file_path)
-
+        src = Path(path_str.strip('"').strip("'"))
         if not src.exists():
-            error(f"File not found: {file_path}")
+            err(f"Not found: {src}")
             continue
-
-        if src.suffix.lower() not in [".pdf", ".docx", ".txt"]:
-            error(f"Unsupported file type: {src.suffix}")
+        if src.suffix.lower() not in SUPPORTED_EXTENSIONS:
+            err(f"Unsupported type: {src.suffix}")
             continue
-
-        dest = domain_docs_dir / src.name
+        dest = RAW_DOCS_DIR / src.name
         try:
             shutil.copy2(str(src), str(dest))
             uploaded.append(src.name)
-            success(f"Copied: {src.name} → {dest}")
+            ok(f"Copied → {dest.name}")
         except Exception as e:
-            error(f"Failed to copy {src.name}: {e}")
+            err(f"Copy failed: {e}")
 
     if uploaded:
-        print(f"\n {len(uploaded)} file(s) ready in: {domain_docs_dir}")
-        info("Now go to option 3 to process these documents.")
+        print(f"\n  📁 {len(uploaded)} file(s) added to raw_docs/")
+        info("Run option 2 to process and index them.")
     else:
         info("No files uploaded.")
 
 
-def menu_process_documents():
-    """Step 3: Ingest and index documents into the vector store."""
-    header("PROCESS DOCUMENTS")
+def menu_process():
+    """Load all docs from raw_docs/, chunk, build FAISS index."""
+    header("PROCESS ALL DOCUMENTS")
 
-    domain_docs_dir = RAW_DOCS_DIR / session.domain
-    if not domain_docs_dir.exists() or not any(domain_docs_dir.iterdir()):
-        error(f"No documents found in: {domain_docs_dir}")
-        info("Upload documents first using option 2.")
+    from backend.ingest import ingest_all, summarize_chunks, get_raw_doc_list
+    from backend.vectorstore import build_vectorstore, refresh_vectorstore
+
+    files = get_raw_doc_list()
+    if not files:
+        err(f"No documents in {RAW_DOCS_DIR}. Upload files first (option 1).")
         return
 
-    from backend.ingest import ingest_documents, get_document_summary
-    from backend.vectorstore import update_vectorstore
+    print(f"\n  Found {len(files)} file(s):")
+    for f in files:
+        print(f"    • {f.name}")
 
-    print(f"\n Scanning: {domain_docs_dir}")
     try:
-        print("\n  ─── Ingestion ───")
-        chunks = ingest_documents(directory=str(domain_docs_dir))
+        print("\n  ─── Loading & Chunking ───")
+        chunks = ingest_all()
 
-        print("\n  ─── Indexing ───")
-        session.vectorstore = update_vectorstore(chunks, session.domain)
-        session.cached_docs = chunks
+        print("\n  ─── Building Index ───")
+        vs = build_vectorstore(chunks)
 
-        # Show summary
-        summary = get_document_summary(chunks)
+        # Update session cache immediately — no need to reload from disk
+        S.vectorstore = vs
+        S.all_chunks  = chunks
+
+        # Show per-file summary
+        summary = summarize_chunks(chunks)
         print("\n  ─── Summary ───")
-        for src, info_data in summary.items():
-            print(f"    • {src}: {info_data['chunks']} chunks | {info_data['page_count']} page(s)")
+        for src, data in summary.items():
+            print(f"    • {src}: {data['chunks']} chunks")
 
-        success(f"Knowledge base ready for domain: '{session.domain}'")
+        ok(f"Knowledge base ready — {len(chunks)} total chunks from {len(files)} file(s)")
 
     except Exception as e:
-        error(f"Processing failed: {e}")
-        logger.exception("Document processing error")
+        err(f"Processing failed: {e}")
+        import traceback; traceback.print_exc()
 
 
-def menu_ask_question():
-    """Step 4: Ask a natural language question against the loaded knowledge base."""
+def menu_ask():
+    """Ask questions against the unified knowledge base."""
     header("ASK A QUESTION")
 
-    if session.vectorstore is None:
-        error("No knowledge base loaded.")
-        info("Select a domain (option 1) and process documents (option 3) first.")
+    if not _ensure_vectorstore():
+        return
+    if not _ensure_slm():
         return
 
-    # Lazy-load SLM
-    if session.slm is None:
-        try:
-            from backend.slm_handler import get_slm
-            session.slm = get_slm()
-        except Exception as e:
-            error(f"SLM initialization failed: {e}")
-            return
+    from backend.rag_pipeline import run_rag
 
-    from backend.rag_pipeline import run_rag_pipeline
-
-    print(f"\n  Domain: '{session.domain}' | SLM: {session.slm.get_model_info().get('model', '?')}")
+    model = S.slm.info().get("model", "?")
+    chunks_count = len(S.all_chunks)
+    print(f"\n  Model: {model}  |  Indexed chunks: {chunks_count}")
     print("  Type 'quit' to return to the main menu.\n")
 
     while True:
         hr("·")
-        question = prompt("Your question")
+        question = ask("Your question")
 
-        if question.lower() in ("quit", "exit", "q", "back"):
+        if question.lower() in ("quit", "exit", "q", "back", ""):
             break
 
-        if not question:
-            continue
-
-        start = time.time()
-
+        t0 = time.time()
         try:
-            result = run_rag_pipeline(
+            result = run_rag(
                 query=question,
-                vectorstore=session.vectorstore,
-                all_documents=session.cached_docs if session.cached_docs else None,
-                slm=session.slm,
+                vectorstore=S.vectorstore,
+                all_chunks=S.all_chunks or None,
+                slm=S.slm,
             )
         except Exception as e:
-            error(f"Pipeline error: {e}")
-            logger.exception("RAG pipeline error")
+            err(f"Pipeline error: {e}")
+            import traceback; traceback.print_exc()
             continue
 
-        elapsed = time.time() - start
+        elapsed = time.time() - t0
 
-        # ─── Display Answer ────────────────────────────────────────────────
-        print("\n" + "─" * 60)
-        print(f" ANSWER\n")
-        print(f"  {result['answer']}")
+        # ── Answer ────────────────────────────────────────────────────────
+        print(f"\n{'─'*60}")
+        print("  📋 ANSWER\n")
+        # Indent each line of the answer
+        for line in result["answer"].splitlines():
+            print(f"  {line}")
 
-        # ─── Display Citations ─────────────────────────────────────────────
+        # ── Citations ─────────────────────────────────────────────────────
         citations = result.get("citations", [])
         if citations:
-            print(f"\n  📎 SOURCES")
+            print("\n  📎 SOURCES")
             seen = set()
             for c in citations:
                 key = (c["source"], c["page"])
@@ -289,115 +209,89 @@ def menu_ask_question():
                     seen.add(key)
                     print(f"    • {c['source']}  (Page {c['page']})")
 
-        # ─── Debug Stats ──────────────────────────────────────────────────
+        # ── Stats ─────────────────────────────────────────────────────────
         print(
-            f"\n  [Retrieved: {result.get('retrieved_count', '?')} chunks | "
-            f"After re-rank: {result.get('reranked_count', '?')} | "
+            f"\n  [Retrieved: {result.get('retrieved','?')}  →  "
+            f"After rerank: {result.get('final','?')}  |  "
             f"Time: {elapsed:.1f}s]"
         )
         print("─" * 60)
 
 
-# ─── SYSTEM STATUS ────────────────────────────────────────────────────────────
-
 def menu_status():
-    """Show current session and system status."""
+    """Show what's loaded and what's on disk."""
     header("SYSTEM STATUS")
+    from backend.vectorstore import index_exists
+    from backend.ingest import get_raw_doc_list
 
-    from backend.vectorstore import list_vectorstores
-
-    print(f"\n  Active domain:    {session.domain}")
-    print(f"  Vectorstore:      {'✓ Loaded' if session.vectorstore else '✗ Not loaded'}")
-    print(f"  SLM:              {'✓ Ready' if session.slm else '○ Not initialized yet'}")
-    print(f"  Cached docs:      {len(session.cached_docs)} chunks")
+    files = get_raw_doc_list()
+    print(f"\n  Raw docs folder:  {RAW_DOCS_DIR}")
+    print(f"  Files in folder:  {len(files)}")
+    for f in files:
+        print(f"    • {f.name}")
+    print(f"\n  FAISS index:      {'✓ Exists' if index_exists() else '✗ Not built yet'}")
+    print(f"  Index in memory:  {'✓ Loaded' if S.vectorstore else '○ Not loaded'}")
+    print(f"  Chunks cached:    {len(S.all_chunks)}")
+    print(f"  SLM loaded:       {'✓ Ready' if S.slm else '○ Standby (loads on first question)'}")
     print(f"  SLM backend:      {SLM_BACKEND}")
-
-    stores = list_vectorstores()
-    if stores:
-        print(f"\n  ─── Existing Knowledge Bases ───")
-        for s in stores:
-            print(f"    • {s['domain']:<12} ({s['size_kb']} KB)  →  {s['path']}")
-    else:
-        print("\n  No knowledge bases built yet.")
 
 
 # ─── MAIN MENU ────────────────────────────────────────────────────────────────
 
-MENU_OPTIONS = {
-    "1": ("Select Domain", menu_select_domain),
-    "2": ("Upload Documents", menu_upload_documents),
-    "3": ("Process Documents", menu_process_documents),
-    "4": ("Ask Question", menu_ask_question),
-    "5": ("System Status", menu_status),
-    "6": ("Exit", None),
+MENU = {
+    "1": ("Upload Document",        menu_upload),
+    "2": ("Process All Documents",  menu_process),
+    "3": ("Ask Question",           menu_ask),
+    "4": ("System Status",          menu_status),
+    "5": ("Exit",                   None),
 }
 
 
-def show_main_menu():
+def show_menu():
     clear()
     print(BANNER)
-    print(f"  Active Domain: {session.domain}  |  "
-          f"KB: {'✓ Loaded' if session.vectorstore else '✗ Not loaded'}  |  "
-          f"SLM: {'✓ Ready' if session.slm else '○ Standby'}\n")
+    idx = "✓" if S.vectorstore else "✗"
+    slm = "✓" if S.slm else "○"
+    print(f"  Index: {idx}  |  SLM: {slm}  |  Chunks: {len(S.all_chunks)}\n")
     hr()
-    for key, (label, _) in MENU_OPTIONS.items():
-        print(f"    {key}. {label}")
+    for k, (label, _) in MENU.items():
+        print(f"    {k}. {label}")
     hr()
 
 
 def run_cli():
-    """Main CLI event loop."""
-    # Optional: pre-select domain from args
     parser = argparse.ArgumentParser(description="SecureDocAI — Offline Document Intelligence")
-    parser.add_argument("--domain", type=str, default=None, help="Pre-select domain on startup")
-    parser.add_argument("--file", type=str, default=None, help="Document to process on startup")
-    parser.add_argument(
-        "--backend",
-        type=str,
-        choices=["ollama", "transformers"],
-        default=None,
-        help="Override SLM backend",
-    )
+    parser.add_argument("--backend", choices=["ollama", "transformers"], default=None)
     args = parser.parse_args()
 
-    # Apply CLI overrides
     if args.backend:
         import config
         config.SLM_BACKEND = args.backend
 
-    if args.domain:
-        session.domain = args.domain.lower()
-        _try_load_vectorstore(session.domain)
-
     while True:
-        show_main_menu()
+        show_menu()
         choice = input("  ▶ Select option: ").strip()
 
-        if choice not in MENU_OPTIONS:
-            warn("Invalid option. Please choose 1–6.")
-            time.sleep(1)
-            continue
+        if choice not in MENU:
+            print("  Invalid option."); time.sleep(0.8); continue
 
-        label, handler = MENU_OPTIONS[choice]
-
-        if choice == "6":
+        label, handler = MENU[choice]
+        if choice == "5":
             clear()
-            print(f"\n Thank you for using {APP_NAME}. Exiting...\n")
+            print(f"\n  👋 Goodbye!\n")
             sys.exit(0)
 
         clear()
         try:
             handler()
         except KeyboardInterrupt:
-            info("Interrupted. Returning to main menu...")
+            info("Interrupted.")
         except Exception as e:
-            error(f"Unexpected error: {e}")
-            logger.exception("Unhandled error in menu handler")
+            err(f"Unexpected error: {e}")
+            import traceback; traceback.print_exc()
 
-        input("\n\n  Press Enter to return to the main menu...")
+        input("\n\n  Press Enter to return to menu...")
 
-
-# ─── ENTRY POINT ──────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     run_cli()

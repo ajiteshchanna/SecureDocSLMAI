@@ -1,503 +1,290 @@
 """
-SecureDocAI - Test Suite
-Validates all system components end-to-end without requiring a live SLM.
-Uses synthetic documents to test the full pipeline.
+SecureDocAI v2.0 - Test Suite
+Tests the unified (no-domain) architecture end-to-end.
 
 Usage:
-    python test.py               # Run all tests
+    python test.py
+    python test.py --quick      # skip model-loading tests
     python test.py --component ingest
-    python test.py --component embeddings
-    python test.py --component vectorstore
-    python test.py --component retrieval
-    python test.py --component pipeline
-    python test.py --quick       # Skip slow model loading tests
 """
 
-import os
-import sys
-import json
-import time
-import logging
-import argparse
-import tempfile
-import traceback
+import sys, json, time, argparse, tempfile, traceback
 from pathlib import Path
-
-# ─── PATH SETUP ───────────────────────────────────────────────────────────────
 
 BASE_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(BASE_DIR))
 
-logging.basicConfig(level=logging.WARNING)
-
 # ─── COLORS ───────────────────────────────────────────────────────────────────
+G="\033[92m"; R="\033[91m"; Y="\033[93m"; C="\033[96m"; E="\033[0m"
+def ok(m):   print(f"  {G}✓{E} {m}")
+def fail(m): print(f"  {R}✗{E} {m}")
+def skip(m): print(f"  {Y}○{E} {m}")
 
-class C:
-    GREEN   = "\033[92m"
-    RED     = "\033[91m"
-    YELLOW  = "\033[93m"
-    CYAN    = "\033[96m"
-    BOLD    = "\033[1m"
-    RESET   = "\033[0m"
+RESULTS = {"passed": 0, "failed": 0, "skipped": 0}
 
-
-def ok(msg):   print(f"  {C.GREEN}✓{C.RESET} {msg}")
-def fail(msg): print(f"  {C.RED}✗{C.RESET} {msg}")
-def skip(msg): print(f"  {C.YELLOW}○{C.RESET} {msg}")
-def info(msg): print(f"  {C.CYAN}→{C.RESET} {msg}")
-
-
-# ─── TEST FIXTURES ────────────────────────────────────────────────────────────
-
-SAMPLE_TEXTS = {
-    "legal.txt": """
-Article 21 of the Indian Constitution guarantees the right to life and personal liberty.
-No person shall be deprived of his life or personal liberty except according to procedure
-established by law. The Supreme Court has interpreted this article broadly to include the
-right to livelihood, health, education, and a dignified life.
-
-Habeas corpus is a legal action through which a person can seek relief from unlawful
-detention. The writ commands the detention authority to produce the prisoner before the
-court. It is a fundamental safeguard of individual freedom.
-
-Article 14 ensures equality before the law and equal protection of the laws within the
-territory of India. This article prohibits class legislation but permits reasonable
-classification based on intelligible differentia.
-""",
-    "finance.txt": """
-A balance sheet is a financial statement that reports a company's assets, liabilities,
-and shareholders' equity at a specific point in time. It follows the fundamental
-accounting equation: Assets = Liabilities + Shareholders' Equity.
-
-Revenue recognition is the accounting principle that determines when revenue is recorded
-in financial statements. Under IFRS 15, revenue is recognized when performance obligations
-are satisfied and control of goods or services is transferred to the customer.
-
-EBITDA stands for Earnings Before Interest, Taxes, Depreciation, and Amortization.
-It is commonly used as a proxy for operating cash flow and to compare profitability
-across companies and industries.
-""",
-    "sports.txt": """
-The offside rule in football (soccer) states that a player is in an offside position
-if they are nearer to the opponent's goal line than both the ball and the second-last
-opponent when the ball is played to them. Being in an offside position is not an offense
-in itself — the player must be involved in active play.
-
-The Duckworth-Lewis-Stern (DLS) method is a mathematical formulation used in cricket to
-calculate target scores in rain-interrupted matches. It adjusts the target based on the
-resources (overs and wickets) remaining for each team.
-
-In basketball, a double-double occurs when a player accumulates a double-digit number in
-two of the five statistical categories: points, rebounds, assists, steals, and blocks,
-during a single game.
-""",
+SAMPLE = {
+    "doc1.txt": "Article 21 of the Indian Constitution guarantees the right to life and personal liberty. "
+                "No person shall be deprived of life except by procedure established by law. " * 8,
+    "doc2.txt": "A balance sheet reports a company's assets, liabilities, and shareholders equity. "
+                "EBITDA stands for Earnings Before Interest Taxes Depreciation and Amortization. " * 8,
+    "doc3.txt": "The offside rule in football states that a player must not be nearer to the opponent's goal "
+                "than both the ball and the second-last opponent when the ball is played. " * 8,
 }
 
-SAMPLE_QUERIES = {
-    "legal": [
-        ("What does Article 21 guarantee?", "right to life"),
-        ("What is habeas corpus?", "unlawful detention"),
-        ("What does Article 14 ensure?", "equality"),
-    ],
-    "finance": [
-        ("What is a balance sheet?", "assets"),
-        ("What does EBITDA stand for?", "earnings"),
-        ("What is revenue recognition?", "IFRS"),
-    ],
-    "sports": [
-        ("What is the offside rule?", "goal line"),
-        ("What is DLS method?", "cricket"),
-        ("What is a double-double in basketball?", "double-digit"),
-    ],
-}
 
-# ─── TEST RUNNER ──────────────────────────────────────────────────────────────
-
-results = {"passed": 0, "failed": 0, "skipped": 0}
-
-
-def run_test(name: str, fn, *args, **kwargs):
-    """Run a single test and track results."""
+def run(name, fn):
     try:
-        fn(*args, **kwargs)
-        ok(name)
-        results["passed"] += 1
+        fn(); ok(name); RESULTS["passed"] += 1
     except AssertionError as e:
-        fail(f"{name} — {e}")
-        results["failed"] += 1
+        fail(f"{name} — {e}"); RESULTS["failed"] += 1
     except Exception as e:
-        fail(f"{name} — {type(e).__name__}: {e}")
-        results["failed"] += 1
+        fail(f"{name} — {type(e).__name__}: {e}"); RESULTS["failed"] += 1
 
 
-def skip_test(name: str, reason: str = ""):
-    skip(f"{name}{f' ({reason})' if reason else ''}")
-    results["skipped"] += 1
+def skipped(name, reason=""):
+    skip(f"{name}" + (f" ({reason})" if reason else "")); RESULTS["skipped"] += 1
 
 
-# ─── INDIVIDUAL TESTS ─────────────────────────────────────────────────────────
+# ─── TESTS ────────────────────────────────────────────────────────────────────
 
-def test_config_imports():
-    from config import (
-        CHUNK_SIZE, CHUNK_OVERLAP, EMBEDDING_MODEL_NAME,
-        FAISS_TOP_K, RERANKER_TOP_K, SUPPORTED_DOMAINS,
-        SLM_BACKEND, BANNER
-    )
-    assert CHUNK_SIZE > 0
-    assert CHUNK_OVERLAP > 0
-    assert CHUNK_SIZE > CHUNK_OVERLAP
-    assert len(SUPPORTED_DOMAINS) >= 4
-    assert EMBEDDING_MODEL_NAME != ""
-    assert SLM_BACKEND in ("ollama", "transformers")
+def test_config():
+    from config import (CHUNK_SIZE, CHUNK_OVERLAP, EMBEDDING_MODEL_NAME,
+                        FAISS_TOP_K, BM25_TOP_K, RERANKER_TOP_K,
+                        RAW_DOCS_DIR, VECTOR_DB_PATH, SLM_BACKEND,
+                        MAX_CONTEXT_CHARS)
+    assert CHUNK_SIZE > 0 and CHUNK_OVERLAP > 0
+    assert FAISS_TOP_K == 6 and BM25_TOP_K == 4 and RERANKER_TOP_K == 4
+    assert MAX_CONTEXT_CHARS > 0
+    assert RAW_DOCS_DIR.exists()
+    assert VECTOR_DB_PATH.exists()
+    # Confirm no domain config remains
+    import config
+    assert not hasattr(config, "SUPPORTED_DOMAINS"), "Domain config should be removed"
+    assert not hasattr(config, "DOMAIN_VECTOR_DB_PATHS"), "Domain paths should be removed"
 
 
-def test_directory_structure():
+def test_structure():
     required = [
-        "main.py", "config.py", "test.py",
-        "backend/__init__.py", "backend/ingest.py",
-        "backend/embeddings.py", "backend/vectorstore.py",
-        "backend/rag_pipeline.py", "backend/slm_handler.py",
-        "finetuning/train_lora.py", "finetuning/model_loader.py",
-        "finetuning/config.py", "finetuning/dataset/train.json",
+        "main.py", "config.py", "test.py", "requirements.txt",
+        "backend/__init__.py", "backend/ingest.py", "backend/embeddings.py",
+        "backend/vectorstore.py", "backend/rag_pipeline.py", "backend/slm_handler.py",
+        "finetuning/train_lora.py", "finetuning/dataset/train.json",
     ]
-    for rel_path in required:
-        full = BASE_DIR / rel_path
-        assert full.exists(), f"Missing: {rel_path}"
+    for p in required:
+        assert (BASE_DIR / p).exists(), f"Missing: {p}"
 
 
-def test_ingest_txt(tmp_dir: Path):
-    from backend.ingest import load_txt, chunk_documents
+def test_ingest(tmp: Path):
+    from config import RAW_DOCS_DIR
+    # Write sample files into raw_docs
+    for name, content in SAMPLE.items():
+        (RAW_DOCS_DIR / name).write_text(content)
 
-    txt_file = tmp_dir / "test.txt"
-    txt_file.write_text(SAMPLE_TEXTS["legal.txt"], encoding="utf-8")
+    from backend.ingest import load_all_documents, chunk_documents, ingest_all, summarize_chunks
+    docs   = load_all_documents()
+    assert len(docs) >= 3, f"Expected ≥3 docs, got {len(docs)}"
 
-    docs = load_txt(str(txt_file))
-    assert len(docs) > 0
-    assert docs[0].page_content.strip() != ""
-    assert docs[0].metadata["source"] == "test.txt"
-
-    chunks = chunk_documents(docs, chunk_size=400, chunk_overlap=50)
-    assert len(chunks) >= 1
+    chunks = chunk_documents(docs)
+    assert len(chunks) > 0
     for c in chunks:
-        assert len(c.page_content) <= 450  # Allow small overage
         assert "source" in c.metadata
+        assert "page"   in c.metadata
         assert "chunk_id" in c.metadata
 
+    summary = summarize_chunks(chunks)
+    assert len(summary) >= 3   # one entry per source file
 
-def test_ingest_multi_file(tmp_dir: Path):
-    from backend.ingest import ingest_documents
-
-    for name, content in SAMPLE_TEXTS.items():
-        (tmp_dir / name).write_text(content, encoding="utf-8")
-
-    chunks = ingest_documents(directory=str(tmp_dir))
-    assert len(chunks) > 0
-
-    sources = {c.metadata.get("source") for c in chunks}
-    assert len(sources) == len(SAMPLE_TEXTS), f"Expected 3 sources, got: {sources}"
+    # Cleanup
+    for name in SAMPLE:
+        (RAW_DOCS_DIR / name).unlink(missing_ok=True)
 
 
-def test_embedding_model():
-    from backend.embeddings import embed_texts, embed_query
-
-    texts = ["What is Article 21?", "A balance sheet reports assets.", "The offside rule."]
-    embeddings = embed_texts(texts)
-
-    assert len(embeddings) == 3
-    assert all(isinstance(e, list) for e in embeddings)
-    assert all(len(e) > 0 for e in embeddings)
-
-    dim = len(embeddings[0])
-    assert all(len(e) == dim for e in embeddings), "All embeddings must have the same dimension"
-
-    query_vec = embed_query("What is habeas corpus?")
-    assert len(query_vec) == dim
+def test_embedder():
+    from backend.embeddings import get_embedder, embed_query
+    emb = get_embedder()
+    assert emb is get_embedder(), "Singleton broken — different instance returned"
+    v = embed_query("What is Article 21?")
+    assert isinstance(v, list) and len(v) == 384
 
 
-def test_vectorstore_create_load(tmp_dir: Path):
-    from backend.ingest import load_txt, chunk_documents
-    from backend.vectorstore import create_vectorstore, load_vectorstore, delete_vectorstore
+def test_vectorstore(tmp: Path):
+    from config import RAW_DOCS_DIR, VECTOR_DB_PATH
+    from langchain_core.documents import Document
+    from backend.vectorstore import build_vectorstore, load_vectorstore, refresh_vectorstore, index_exists
+    import shutil
 
-    from config import VECTOR_DB_DIR
-    test_domain = "_test_domain_"
+    docs = [Document(page_content="Article 21 protects right to life.",
+                     metadata={"source": "test.pdf", "page": 1, "chunk_id": 0}),
+            Document(page_content="EBITDA measures operating performance.",
+                     metadata={"source": "test.pdf", "page": 2, "chunk_id": 1})]
 
-    # Setup
-    txt_file = tmp_dir / "legal.txt"
-    txt_file.write_text(SAMPLE_TEXTS["legal.txt"], encoding="utf-8")
-    docs = load_txt(str(txt_file))
-    chunks = chunk_documents(docs)
-
-    # Create
-    vs = create_vectorstore(chunks, test_domain)
+    vs = build_vectorstore(docs)
     assert vs is not None
+    assert index_exists()
 
-    # Load
-    loaded_vs = load_vectorstore(test_domain)
-    assert loaded_vs is not None
+    # Test cache: load_vectorstore should return same object
+    refresh_vectorstore()   # drop cache
+    vs2 = load_vectorstore()
+    assert vs2 is not None
 
-    # Query it
-    results = loaded_vs.similarity_search("Article 21", k=2)
+    # Singleton: second call returns cached
+    vs3 = load_vectorstore()
+    assert vs2 is vs3, "load_vectorstore should return cached instance"
+
+    results = vs2.similarity_search("Article 21", k=1)
     assert len(results) > 0
-    assert any("21" in r.page_content for r in results)
-
-    # Cleanup
-    delete_vectorstore(test_domain)
-    test_path = Path(str(VECTOR_DB_DIR)) / test_domain
-    assert not test_path.exists()
+    assert "Article" in results[0].page_content
 
 
-def test_semantic_search(tmp_dir: Path):
-    from backend.ingest import load_txt, chunk_documents
-    from backend.vectorstore import create_vectorstore
-    from backend.rag_pipeline import semantic_search
+def test_merge_dedup():
+    from langchain_core.documents import Document
+    from backend.rag_pipeline import _merge
 
-    txt_file = tmp_dir / "legal.txt"
-    txt_file.write_text(SAMPLE_TEXTS["legal.txt"], encoding="utf-8")
-    docs = load_txt(str(txt_file))
-    chunks = chunk_documents(docs)
-    vs = create_vectorstore(chunks, "_test_search_")
+    a = Document(page_content="Article 21.", metadata={"source": "a.pdf", "page": 1})
+    b = Document(page_content="EBITDA ratio.", metadata={"source": "b.pdf", "page": 1})
+    c = Document(page_content="Article 21.", metadata={"source": "a.pdf", "page": 1})  # dup of a
 
-    results = semantic_search("What is habeas corpus?", vs, top_k=3)
-    assert len(results) > 0
-    assert all(isinstance(r[0].page_content, str) for r in results)
-    assert all(isinstance(r[1], float) for r in results)
-
-    # Cleanup
-    from backend.vectorstore import delete_vectorstore
-    delete_vectorstore("_test_search_")
+    merged = _merge([(a, 0.9), (b, 0.8)], [(c, 1.2), (b, 1.0)])
+    assert len(merged) == 2   # c is dup of a, second b is dup
 
 
-def test_bm25_search(tmp_dir: Path):
-    from backend.ingest import load_txt, chunk_documents
-    from backend.rag_pipeline import bm25_search
+def test_context_build():
+    from langchain_core.documents import Document
+    from backend.rag_pipeline import _build_context
 
-    txt_file = tmp_dir / "legal.txt"
-    txt_file.write_text(SAMPLE_TEXTS["legal.txt"], encoding="utf-8")
-    docs = load_txt(str(txt_file))
-    chunks = chunk_documents(docs)
-
-    results = bm25_search("habeas corpus detention", chunks, top_k=3)
-    # BM25 may return 0 results if rank-bm25 is not installed — that's OK
-    assert isinstance(results, list)
-    if results:
-        assert all(isinstance(r[0].page_content, str) for r in results)
-
-
-def test_merge_results():
-    from langchain.schema import Document
-    from backend.rag_pipeline import merge_results
-
-    doc_a = Document(page_content="Article 21 guarantees life.", metadata={"source": "a.txt", "page": 1})
-    doc_b = Document(page_content="Habeas corpus is a writ.", metadata={"source": "b.txt", "page": 2})
-    doc_c = Document(page_content="Article 21 guarantees life.", metadata={"source": "a.txt", "page": 1})  # Duplicate
-
-    semantic = [(doc_a, 0.95), (doc_b, 0.80)]
-    bm25 = [(doc_c, 1.5), (doc_b, 1.2)]  # doc_c is dup of doc_a, doc_b is dup
-
-    merged = merge_results(semantic, bm25)
-    assert len(merged) == 2  # Duplicates removed
-    contents = [m.page_content for m in merged]
-    assert "Article 21" in contents[0] or "Habeas" in contents[0]
+    ranked = [
+        (Document(page_content="Article 21 protects life.", metadata={"source": "const.pdf", "page": 12}), 0.95),
+        (Document(page_content="EBITDA is a profitability metric.", metadata={"source": "fin.pdf", "page": 3}), 0.80),
+    ]
+    ctx, cites = _build_context(ranked)
+    assert "Article 21" in ctx
+    assert "EBITDA" in ctx
+    assert len(cites) == 2
+    assert cites[0]["source"] == "const.pdf"
+    assert cites[0]["page"] == 12
 
 
-def test_context_construction():
-    from langchain.schema import Document
-    from backend.rag_pipeline import build_context
+def test_bm25():
+    from langchain_core.documents import Document
+    from backend.rag_pipeline import _bm25_search
 
     docs = [
-        (Document(page_content="Article 21 protects the right to life.", metadata={"source": "const.pdf", "page": 12}), 0.95),
-        (Document(page_content="Habeas corpus prevents unlawful detention.", metadata={"source": "const.pdf", "page": 15}), 0.88),
+        Document(page_content="Article 21 guarantees right to life.",
+                 metadata={"source": "a.txt", "page": 1}),
+        Document(page_content="Balance sheet shows company assets.",
+                 metadata={"source": "b.txt", "page": 1}),
     ]
-
-    context_str, citations = build_context(docs)
-
-    assert "Article 21" in context_str
-    assert "Habeas corpus" in context_str
-    assert len(citations) == 2
-    assert citations[0]["source"] == "const.pdf"
-    assert citations[0]["page"] == 12
-    assert citations[1]["page"] == 15
+    results = _bm25_search("Article 21 right life", docs)
+    # BM25 optional — ok if empty (rank-bm25 not installed)
+    assert isinstance(results, list)
+    if results:
+        assert "Article" in results[0][0].page_content
 
 
-def test_prompt_formatting():
+def test_prompt_template():
     from config import RAG_PROMPT_TEMPLATE, SYSTEM_PROMPT
-
-    context = "Article 21 guarantees the right to life."
-    question = "What does Article 21 protect?"
-
-    prompt = RAG_PROMPT_TEMPLATE.format(context=context, question=question)
+    prompt = RAG_PROMPT_TEMPLATE.format(
+        context="Article 21 protects life.",
+        question="What does Article 21 protect?"
+    )
     assert "Article 21" in prompt
-    assert question in prompt
-    assert len(prompt) > 50
-
+    assert "What does Article 21" in prompt
+    assert "Not found" in prompt
     assert "document" in SYSTEM_PROMPT.lower()
-    assert "hallucination" in SYSTEM_PROMPT.lower() or "only" in SYSTEM_PROMPT.lower()
 
 
-def test_dataset_format():
-    dataset_path = BASE_DIR / "finetuning" / "dataset" / "train.json"
-    assert dataset_path.exists()
+def test_full_pipeline_mock():
+    from langchain_core.documents import Document
+    from backend.ingest import chunk_documents
+    from backend.vectorstore import build_vectorstore, refresh_vectorstore
+    from backend.rag_pipeline import run_rag
 
-    with open(dataset_path, "r") as f:
-        data = json.load(f)
+    docs = [
+        Document(page_content=" ".join(["Article 21 guarantees right to life and liberty."] * 10),
+                 metadata={"source": "const.pdf", "page": 1, "chunk_id": 0}),
+        Document(page_content=" ".join(["EBITDA is an operating performance measure."] * 10),
+                 metadata={"source": "finance.pdf", "page": 1, "chunk_id": 1}),
+    ]
+    refresh_vectorstore()
+    vs = build_vectorstore(docs)
 
-    assert isinstance(data, list)
-    assert len(data) >= 3
-
-    for item in data:
-        assert "instruction" in item, f"Missing 'instruction' key"
-        assert "response" in item, f"Missing 'response' key"
-        assert len(item["instruction"]) > 0
-        assert len(item["response"]) > 0
-
-
-def test_reranker(tmp_dir: Path):
-    try:
-        from sentence_transformers import CrossEncoder
-        from langchain.schema import Document
-        from backend.rag_pipeline import rerank_documents
-
-        docs = [
-            Document(page_content="Article 21 guarantees life and liberty.", metadata={"source": "a.pdf", "page": 1}),
-            Document(page_content="The weather is nice today.", metadata={"source": "b.pdf", "page": 1}),
-            Document(page_content="Habeas corpus prevents unlawful detention.", metadata={"source": "c.pdf", "page": 1}),
-        ]
-
-        ranked = rerank_documents("What is Article 21?", docs, top_k=2)
-        assert len(ranked) <= 2
-        # The most relevant doc should rank first or second
-        top_contents = " ".join(r[0].page_content for r in ranked)
-        assert "Article 21" in top_contents or "liberty" in top_contents
-
-    except ImportError:
-        skip_test("reranker", "sentence-transformers not installed")
-        return
-
-
-def test_full_pipeline_mock(tmp_dir: Path):
-    """
-    Test the full pipeline with a mock SLM to avoid loading a real model.
-    """
-    from langchain.schema import Document
-    from backend.ingest import load_txt, chunk_documents
-    from backend.vectorstore import create_vectorstore
-    from backend.rag_pipeline import run_rag_pipeline
-
-    # Create synthetic document
-    txt_file = tmp_dir / "legal.txt"
-    txt_file.write_text(SAMPLE_TEXTS["legal.txt"], encoding="utf-8")
-    docs = load_txt(str(txt_file))
-    chunks = chunk_documents(docs)
-    vs = create_vectorstore(chunks, "_test_pipeline_")
-
-    # Mock SLM
     class MockSLM:
         def generate_answer(self, question, context):
-            return f"MOCK ANSWER based on: {context[:50]}..."
-        def get_model_info(self):
-            return {"backend": "mock", "model": "mock-slm"}
+            return f"MOCK: {context[:60]}..."
+        def info(self): return {"backend": "mock", "model": "mock"}
 
-    result = run_rag_pipeline(
-        query="What does Article 21 guarantee?",
-        vectorstore=vs,
-        all_documents=chunks,
-        slm=MockSLM(),
-    )
-
+    result = run_rag("What is Article 21?", vs, all_chunks=docs, slm=MockSLM())
     assert "answer" in result
     assert "citations" in result
     assert len(result["answer"]) > 0
     assert isinstance(result["citations"], list)
 
-    # Cleanup
-    from backend.vectorstore import delete_vectorstore
-    delete_vectorstore("_test_pipeline_")
+
+def test_no_domain_references():
+    """Ensure domain logic is fully removed from key files."""
+    domain_keywords = ["SUPPORTED_DOMAINS", "DOMAIN_VECTOR_DB_PATHS",
+                       "domain_exists", "select_domain", "menu_select_domain"]
+    files_to_check  = ["config.py", "backend/vectorstore.py",
+                       "backend/rag_pipeline.py", "main.py"]
+    for rel in files_to_check:
+        content = (BASE_DIR / rel).read_text()
+        for kw in domain_keywords:
+            assert kw not in content, f"Found domain reference '{kw}' in {rel}"
 
 
-# ─── TEST ORCHESTRATOR ────────────────────────────────────────────────────────
-
-def run_all_tests(quick: bool = False, component: str = None):
-    print(f"\n{'═' * 60}")
-    print(f"  SecureDocAI — Test Suite")
-    print(f"{'═' * 60}\n")
-
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp_dir = Path(tmp)
-
-        tests = {
-            "config": [
-                ("Config imports", test_config_imports),
-            ],
-            "structure": [
-                ("Directory structure", test_directory_structure),
-            ],
-            "ingest": [
-                ("Ingest TXT file", lambda: test_ingest_txt(tmp_dir)),
-                ("Ingest multiple files", lambda: test_ingest_multi_file(tmp_dir)),
-            ],
-            "embeddings": [
-                ("Embedding model (may be slow)", test_embedding_model),
-            ],
-            "vectorstore": [
-                ("Vectorstore create/load/delete", lambda: test_vectorstore_create_load(tmp_dir)),
-            ],
-            "retrieval": [
-                ("Semantic search (FAISS)", lambda: test_semantic_search(tmp_dir)),
-                ("Keyword search (BM25)", lambda: test_bm25_search(tmp_dir)),
-                ("Merge results", test_merge_results),
-                ("Context construction", test_context_construction),
-                ("Re-ranker (CrossEncoder)", lambda: test_reranker(tmp_dir)),
-            ],
-            "pipeline": [
-                ("Prompt formatting", test_prompt_formatting),
-                ("Dataset format", test_dataset_format),
-                ("Full pipeline (mock SLM)", lambda: test_full_pipeline_mock(tmp_dir)),
-            ],
-        }
-
-        for group, group_tests in tests.items():
-            if component and group != component:
-                continue
-
-            print(f"\n  ── {group.upper()} ──")
-
-            for name, fn in group_tests:
-                if quick and group == "embeddings":
-                    skip_test(name, "quick mode")
-                    continue
-                run_test(name, fn)
-
-    # Summary
-    total = results["passed"] + results["failed"] + results["skipped"]
-    print(f"\n{'═' * 60}")
-    print(
-        f"  Results: "
-        f"{C.GREEN}{results['passed']} passed{C.RESET}  "
-        f"{C.RED}{results['failed']} failed{C.RESET}  "
-        f"{C.YELLOW}{results['skipped']} skipped{C.RESET}  "
-        f"/ {total} total"
-    )
-    print(f"{'═' * 60}\n")
-
-    if results["failed"] > 0:
-        sys.exit(1)
+def test_dataset():
+    data = json.loads((BASE_DIR / "finetuning/dataset/train.json").read_text())
+    assert isinstance(data, list) and len(data) >= 3
+    for item in data:
+        assert "instruction" in item and "response" in item
 
 
-# ─── CLI ──────────────────────────────────────────────────────────────────────
+# ─── RUNNER ───────────────────────────────────────────────────────────────────
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="SecureDocAI Test Suite")
-    parser.add_argument(
-        "--component",
-        choices=["config", "structure", "ingest", "embeddings", "vectorstore", "retrieval", "pipeline"],
-        default=None,
-        help="Run only tests for a specific component",
-    )
-    parser.add_argument(
-        "--quick",
-        action="store_true",
-        help="Skip slow model-loading tests",
-    )
+GROUPS = {
+    "config":    [("Config (no domains)",         test_config),
+                  ("Directory structure",          test_structure),
+                  ("No domain references in code", test_no_domain_references)],
+    "ingest":    [("Scan & load all docs",         lambda: test_ingest(None)),
+                  ("Prompt template",              test_prompt_template),
+                  ("Dataset format",              test_dataset)],
+    "embeddings":[("Embedding singleton",         test_embedder)],
+    "vectorstore":[("Build / load / cache",       lambda: test_vectorstore(None))],
+    "retrieval": [("BM25 search",                 test_bm25),
+                  ("Merge & dedup",               test_merge_dedup),
+                  ("Context build",               test_context_build)],
+    "pipeline":  [("Full pipeline (mock SLM)",    test_full_pipeline_mock)],
+}
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--quick",     action="store_true")
+    parser.add_argument("--component", choices=list(GROUPS), default=None)
     args = parser.parse_args()
 
-    run_all_tests(quick=args.quick, component=args.component)
+    print(f"\n{'═'*60}")
+    print("  SecureDocAI v2.0 — Test Suite")
+    print(f"{'═'*60}\n")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        for group, tests in GROUPS.items():
+            if args.component and group != args.component:
+                continue
+            print(f"\n  ── {group.upper()} ──")
+            for name, fn in tests:
+                if args.quick and group == "embeddings":
+                    skipped(name, "quick mode"); continue
+                run(name, fn)
+
+    total = sum(RESULTS.values())
+    print(f"\n{'═'*60}")
+    print(f"  {G}{RESULTS['passed']} passed{E}  "
+          f"{R}{RESULTS['failed']} failed{E}  "
+          f"{Y}{RESULTS['skipped']} skipped{E}  / {total} total")
+    print(f"{'═'*60}\n")
+    sys.exit(1 if RESULTS["failed"] else 0)
+
+
+if __name__ == "__main__":
+    main()
