@@ -1,4 +1,4 @@
-# 🔒 SecureDocAI
+#  SecureDocAI
 
 **Fully Offline, CLI-Based Document Intelligence System**  
 Powered by Small Language Models (SLM) + Retrieval-Augmented Generation (RAG)

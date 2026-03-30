@@ -107,7 +107,7 @@ def menu_upload():
             err(f"Copy failed: {e}")
 
     if uploaded:
-        print(f"\n  📁 {len(uploaded)} file(s) added to raw_docs/")
+        print(f"\n {len(uploaded)} file(s) added to raw_docs/")
         info("Run option 2 to process and index them.")
     else:
         info("No files uploaded.")
@@ -193,7 +193,7 @@ def menu_ask():
 
         # ── Answer ────────────────────────────────────────────────────────
         print(f"\n{'─'*60}")
-        print("  📋 ANSWER\n")
+        print("  ANSWER\n")
         # Indent each line of the answer
         for line in result["answer"].splitlines():
             print(f"  {line}")

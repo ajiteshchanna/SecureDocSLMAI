@@ -1,29 +1,38 @@
-# ─── SecureDocAI - Requirements ───────────────────────────────────────────────
+# ─── SecureDocAI v2.0 - Requirements ─────────────────────────────────────────
 # Install with: pip install -r requirements.txt
+#
+# NOTE: Tesseract OCR binary must be installed SEPARATELY.
+#       See TESSERACT_SETUP.md for full instructions.
 
 # ─── Core ML / NLP ───────────────────────────────────────────────────────────
 torch>=2.0.0
 transformers>=4.40.0
 sentence-transformers>=2.7.0
 
-# Document Loading
-pypdf>=3.0.0
-docx2txt>=0.8
+# ─── Document Loading ─────────────────────────────────────────────────────────
+pypdf>=3.0.0                    # Text-based PDF loading
+docx2txt>=0.8                   # DOCX loading
 
-# LangChain Ecosystem
+# ─── OCR (Scanned PDFs + Images) ─────────────────────────────────────────────
+pytesseract>=0.3.10             # Python wrapper for Tesseract OCR engine
+pymupdf>=1.24.0                 # PDF → image conversion (no Poppler needed on Windows)
+pillow>=10.0.0                  # Image handling for OCR pipeline
+# pdf2image>=1.17.0             # Alternative PDF→image (needs Poppler — optional)
+
+# ─── LangChain Ecosystem ─────────────────────────────────────────────────────
 langchain>=0.2.0
 langchain-community>=0.2.0
 langchain-core>=0.2.0
 langchain-text-splitters>=0.2.0
 langchain-huggingface>=0.0.3
 
-# Vector Store
+# ─── Vector Store ─────────────────────────────────────────────────────────────
 faiss-cpu>=1.8.0
 
-# Retrieval
+# ─── Retrieval ────────────────────────────────────────────────────────────────
 rank-bm25>=0.2.2
 
-# Fine-tuning
+# ─── Fine-tuning (Optional) ───────────────────────────────────────────────────
 peft>=0.11.0
 datasets>=2.20.0
 accelerate>=0.31.0
