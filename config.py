@@ -6,9 +6,12 @@ Unified single-DB, single-folder system. No domain separation.
 import os
 from pathlib import Path
 
-# ─── FORCE OFFLINE MODE ───────────────────────────────────────────────────────
-os.environ["TRANSFORMERS_OFFLINE"] = "1"   # Set to "1" after first model download
+# ─── OFFLINE MODE ─────────────────────────────────────────────────────────────
+# "0" = allow downloads (needed on first run to cache models)
+# "1" = fully offline (set this AFTER running download_models.py)
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
 os.environ["HF_DATASETS_OFFLINE"]  = "1"
+os.environ["HF_HUB_OFFLINE"]       = "1"   # Also controls huggingface_hub
 
 # ─── BASE PATHS ───────────────────────────────────────────────────────────────
 
@@ -97,8 +100,18 @@ APP_DESCRIPTION = "Fully Offline Document Intelligence | SLM + RAG"
 
 BANNER = """
 ╔══════════════════════════════════════════════════════════╗
-║                 SecureDocAI v2.0.0                       ║
+║              SecureDocAI v2.0.0                          ║
 ║        Fully Offline Document Intelligence | SLM + RAG   ║
-║                 100% Offline & Private                   ║
+║                   🔒 100% Offline & Private               ║
 ╚══════════════════════════════════════════════════════════╝
 """
+
+# ─── OCR CONFIGURATION ────────────────────────────────────────────────────────
+# These are read by backend/ocr.py
+
+OCR_DPI             = 200        # Page render DPI (200=fast, 300=high quality)
+OCR_MIN_CHARS       = 50         # Pages below this char count trigger OCR
+TESSERACT_LANG      = "eng"      # Tesseract language code (eng, hin, eng+hin, etc.)
+
+# Supported image file extensions (processed via OCR)
+IMAGE_EXTENSIONS    = [".jpg", ".jpeg", ".png"]
