@@ -23,6 +23,10 @@ def get_reranker():
     if _reranker is None:
         try:
             from sentence_transformers import CrossEncoder
+            import transformers
+            # Suppress LOAD REPORT from unexpected keys
+            transformers.logging.set_verbosity_error()
+            
             print(f"  🔧 Loading re-ranker: {RERANKER_MODEL_NAME}...")
             _reranker = CrossEncoder(RERANKER_MODEL_NAME)
             print("  ✓ Re-ranker ready.")

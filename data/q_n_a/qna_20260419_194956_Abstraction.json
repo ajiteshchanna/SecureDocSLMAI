@@ -1,0 +1,5 @@
+{
+    "question": "Abstraction",
+    "answer": "Abstraction refers to hiding unnecessary details of a class and exposing only those parts that are relevant or required by the user. This concept allows users to work with simplified representations without needing to understand every detail within an object, such as how different components like engine, radiator, mechanical, and electrical equipment function in a car (as mentioned on page 120 of core-java-an-integrated-approach_compress.pdf).",
+    "sources": "core-java-an-integrated-approach_compress.pdf (Page 129), core-java-an-integrated-approach_compress.pdf (Page 235), core-java-an-integrated-approach_compress.pdf (Page 227), core-java-an-integrated-approach_compress.pdf (Page 234)"
+}

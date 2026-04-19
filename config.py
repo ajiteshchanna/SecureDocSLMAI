@@ -21,8 +21,9 @@ RAW_DOCS_DIR      = DATA_DIR / "raw_docs"      # All documents go here
 VECTOR_DB_PATH    = DATA_DIR / "vector_db"     # Single unified FAISS index
 MODELS_DIR        = BASE_DIR / "models"
 LORA_ADAPTERS_DIR = MODELS_DIR / "lora_adapters"
+QNA_DIR           = DATA_DIR / "q_n_a"
 
-for _d in [RAW_DOCS_DIR, VECTOR_DB_PATH, MODELS_DIR, LORA_ADAPTERS_DIR]:
+for _d in [RAW_DOCS_DIR, VECTOR_DB_PATH, MODELS_DIR, LORA_ADAPTERS_DIR, QNA_DIR]:
     _d.mkdir(parents=True, exist_ok=True)
 
 # ─── DOCUMENT INGESTION ───────────────────────────────────────────────────────

@@ -13,13 +13,21 @@ import time
 import shutil
 import logging
 import argparse
+import json
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
+
+from rich.console import Console
+from rich.panel import Panel
+from rich.markdown import Markdown
+
+console = Console()
 
 BASE_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(BASE_DIR))
 
-from config import BANNER, APP_NAME, RAW_DOCS_DIR, SUPPORTED_EXTENSIONS, SLM_BACKEND
+from config import BANNER, APP_NAME, RAW_DOCS_DIR, SUPPORTED_EXTENSIONS, SLM_BACKEND, QNA_DIR
 
 logging.basicConfig(level=logging.WARNING,
                     format="%(levelname)s [%(name)s]: %(message)s")
@@ -192,30 +200,47 @@ def menu_ask():
         elapsed = time.time() - t0
 
         # ── Answer ────────────────────────────────────────────────────────
-        print(f"\n{'─'*60}")
-        print("  ANSWER\n")
-        # Indent each line of the answer
-        for line in result["answer"].splitlines():
-            print(f"  {line}")
+        console.print()
+        console.print(Panel(Markdown(result["answer"]), title="[bold green]ANSWER[/bold green]", border_style="green", padding=(1, 2)))
 
         # ── Citations ─────────────────────────────────────────────────────
         citations = result.get("citations", [])
+        src_text = ""
         if citations:
-            print("\n  📎 SOURCES")
+            console.print("\n[bold yellow]  📎 SOURCES[/bold yellow]")
             seen = set()
             for c in citations:
                 key = (c["source"], c["page"])
                 if key not in seen:
                     seen.add(key)
-                    print(f"    • {c['source']}  (Page {c['page']})")
+                    console.print(f"    • {c['source']}  (Page {c['page']})")
+                    src_text += f"{c['source']} (Page {c['page']}), "
+            src_text = src_text.rstrip(", ")
 
         # ── Stats ─────────────────────────────────────────────────────────
-        print(
-            f"\n  [Retrieved: {result.get('retrieved','?')}  →  "
+        console.print(
+            f"\n  [dim]Retrieved: {result.get('retrieved','?')}  →  "
             f"After rerank: {result.get('final','?')}  |  "
-            f"Time: {elapsed:.1f}s]"
+            f"Time: {elapsed:.1f}s[/dim]"
         )
-        print("─" * 60)
+        
+        # ── Save to JSON ──────────────────────────────────────────────────
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            safe_q = "".join(c if c.isalnum() else "_" for c in question)[:30]
+            filename = f"qna_{timestamp}_{safe_q}.json"
+            filepath = QNA_DIR / filename
+            
+            qna_data = {
+                "question": question,
+                "answer": result["answer"],
+                "sources": src_text if citations else "No sources found"
+            }
+            
+            with open(filepath, "w", encoding="utf-8") as f:
+                json.dump(qna_data, f, indent=4, ensure_ascii=False)
+        except Exception as e:
+            console.print(f"  [red]Failed to save Q&A: {e}[/red]")
 
 
 def menu_status():
